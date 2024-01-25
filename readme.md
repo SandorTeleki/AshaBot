@@ -1,5 +1,7 @@
-# Immersion Bot
-##
+# Asha Bot
+
+Forked from Lexxicon's (Immersion Bot)[https://github.com/Lexxicon/ImmersionBot] for a more permament hosting solution. 
+
 ## Basic overview of functionality
 #
 ### Roles
