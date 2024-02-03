@@ -51,6 +51,7 @@ log.info(``);
 const STUDENT_ROLE = process.env.STUDENT_ROLE || "Student" as string;
 const MENTOR_ROLE = process.env.MENTOR_ROLE || "Mentor" as string;
 const SUB_ROLE = process.env.SUB_ROLE || "BELOVED SUBS" as string;
+const BLITZ_ROLE = process.env.BLITZ_ROLE || "Blitzer" as string;
 const MENTOR_CATEGORY = process.env.MENTOR_CATEGORY || "Teaching Channel" as string;
 const COMMAND_PREFIX = process.env.COMMAND_PREFIX || "!" as string;
 const CHANNELS_PER_STUDENT = Number(process.env.CHANNELS_PER_STUDENT || 5);
@@ -254,6 +255,11 @@ async function initGuild(msg: Message & { guild: Guild }) {
     if (!roleManager.cache.find(role => role.name == SUB_ROLE)) {
         const subRole = await roleManager.create({ data: { name: SUB_ROLE, mentionable: false, permissions: 0 } });
         await msg.channel.send(`Created ${subRole.toString()} as sub role`);
+        changed = true;
+    }
+    if (!roleManager.cache.find(role => role.name == BLITZ_ROLE)) {
+        const blitzRole = await roleManager.create({ data: { name: BLITZ_ROLE, mentionable: false, permissions: 0 } });
+        await msg.channel.send(`Created ${blitzRole.toString()} as blitz role`);
         changed = true;
     }
     let categoryRole = roleManager.cache.find(role => role.name == MENTOR_CATEGORY);
@@ -597,7 +603,7 @@ async function addSubRole(msg: Message & {guild: Guild}){
     }
 
     await msg.member.roles.add(role);
-    await msg.channel.send(`Now I love you the maxium amount! Thank you for being an ${SUB_ROLE}`);
+    await msg.channel.send(`Now I love you the maxium amount! Thank you for being a ${SUB_ROLE}`);
     return;
 }
 
@@ -622,11 +628,54 @@ async function removeSubRole(msg: Message & {guild: Guild}){
     return;
 }
 
+async function addBlitzRole(msg: Message & {guild: Guild}){
+    const role = await findRole(msg, BLITZ_ROLE);
+    if (!role) {
+        await msg.channel.send(`Failed to find role ${BLITZ_ROLE}`);
+        return;
+    }
+
+    if(!msg.member){
+        await msg.channel.send(`This only works in guild channels!`);
+        return;
+    }
+
+    if(msg.member.roles.cache.find(r => r.id == role.id) != null){
+        await msg.channel.send(`Looks like I already blitz you as much as I can! I can only blitz you more if you don't have the ${BLITZ_ROLE} role!`);
+    }
+
+    await msg.member.roles.add(role);
+    await msg.channel.send(`Now I blitz you the maxium amount! Thank you for being a ${BLITZ_ROLE}`);
+    return;
+}
+
+async function removeBlitzRole(msg: Message & {guild: Guild}){
+    const role = await findRole(msg, BLITZ_ROLE);
+    if (!role) {
+        await msg.channel.send(`Failed to find role ${BLITZ_ROLE}`);
+        return;
+    }
+
+    if(!msg.member){
+        await msg.channel.send(`This only works in guild channels!`);
+        return;
+    }
+
+    if(msg.member.roles.cache.find(r => r.id == role.id) == null){
+        await msg.channel.send(`Looks like you don't want to be blitzed! You can only renounce being blitzed if you have the ${BLITZ_ROLE} role!`);
+    }
+
+    await msg.member.roles.remove(role);
+    await msg.channel.send(`You have activated a NAP3! I can no longer blitz you... I'll try to remember the time when you were a ${BLITZ_ROLE}`);
+    return;
+}
+
 bot.on('ready', () => {
     log.info(`Logged in as ${bot?.user?.tag}!`);
 });
 
 bot.on('message', async msg => {
+    //log.debug(`processing from ${msg.member?.displayName}`);
     try {
         if (!msg.content.startsWith(`${COMMAND_PREFIX}`) || msg.channel.type == 'dm' || BANNED_PREFIXES.filter(ban => msg.content.startsWith(ban)).length > 0) {
             return;
@@ -668,6 +717,12 @@ bot.on('message', async msg => {
                     case 'leaveme':
                         await removeSubRole(msg);
                         break;
+                    case 'blitzme':
+                        await addBlitzRole(msg);
+                        break;
+                    case 'protectme':
+                        await removeBlitzRole(msg);
+                        break;
                     case 'help': {
                         const cmds: string[] = [];
                         cmds.push('Commands');
@@ -678,6 +733,8 @@ bot.on('message', async msg => {
                         cmds.push(`${COMMAND_PREFIX}find -- find your channel`);
                         cmds.push(`${COMMAND_PREFIX}loveMe causes me to love you more (Gives you the ${SUB_ROLE} role)`);
                         cmds.push(`${COMMAND_PREFIX}leaveMe because you don't love me anymore (Removes the ${SUB_ROLE} role)`);
+                        cmds.push(`${COMMAND_PREFIX}blitzMe causes me to blitz you more (Gives you the ${BLITZ_ROLE} role)`);
+                        cmds.push(`${COMMAND_PREFIX}protectMe because you don't want to be a Blitzer anymore (Removes the ${BLITZ_ROLE} role)`);
                         if (msg.member?.roles.cache.find(r => r.name == MENTOR_ROLE) != null) {
                             cmds.push(`[${MENTOR_ROLE} only] ${COMMAND_PREFIX}findStudents -- find ${mentorCMD} channel(s) where a mentor hasn't talked in the last five messages`);
                             cmds.push(`[${MENTOR_ROLE} only] ${COMMAND_PREFIX}find <@user> -- find ${mentorCMD} channel(s) for a user`);
