@@ -17,4 +17,4 @@ jobs:
         username: ${{ secrets.LINODE_USER }}
         key: ${{ secrets.LINODE_SSH_KEY }}
         script: |
-          /root/scripts/AshaBot.sh
+          /root/scripts/deploy-AshaBot.sh
