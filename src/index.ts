@@ -7,7 +7,7 @@ require('source-map-support').install();
 import AsciiTable from 'ascii-table';
 import AsciiChart from 'asciichart';
 import dateFormat from 'dateformat';
-import { CategoryChannel, Client, Guild, GuildChannel, GuildMember, Message, MessageManager, Permissions, TextChannel } from 'discord.js';
+import { CategoryChannel, ChannelType, Client, GatewayIntentBits, Guild, GuildChannel, GuildMember, Message, MessageManager, PermissionsBitField, TextChannel, BaseGuildTextChannel } from 'discord.js';
 import { keys } from 'lodash';
 import { getLogger, shutdown } from 'log4js';
 import fs from 'fs/promises';
@@ -64,7 +64,14 @@ const BANNED_PREFIXES: string[] = require('../res/banned_prefixes.json').values;
 if(BANNED_PREFIXES.indexOf(COMMAND_PREFIX) != -1){
     throw new Error(`Requested command prefix is disallowed! ${COMMAND_PREFIX}`);
 }
-const bot = new Client();
+const bot = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
+        GatewayIntentBits.GuildMembers
+    ]
+});
 const TOKEN = process.env.TOKEN;
 
 export function getDiscordBot() {
@@ -94,11 +101,11 @@ function logBase(x, y){
 }
 
 async function findCategories(guild: Guild) {
-    const roleManager = await guild.roles.fetch();
-    const categoryRole = roleManager.cache.find(role => role.name == MENTOR_CATEGORY);
+    const roles = await guild.roles.fetch();
+    const categoryRole = roles.find(role => role.name == MENTOR_CATEGORY);
     const categories: { [index: string]: CategoryChannel[] } = {};
     guild.channels.cache.forEach(channel => {
-        if (channel.type == "category" && categoryRole?.id && channel.permissionOverwrites.find(overwrite => overwrite.id == categoryRole?.id)) {
+        if (channel.type == ChannelType.GuildCategory && categoryRole?.id && channel.permissionOverwrites.cache.find(overwrite => overwrite.id == categoryRole?.id)) {
             const category = channel.name.split(' ')[0].toLowerCase();
             if (!categories[category]) {
                 categories[category] = [];
@@ -119,16 +126,17 @@ async function extendCategory(categoryName: string, msg: Message & { guild: Guil
     let position = -1;
     let lastFoundCategory = msg.guild.channels.cache.find(channel => channel.name.toLowerCase() == `${categoryName} ${counter}`);
     if (lastFoundCategory) {
-        position = lastFoundCategory.position;
+        position = (lastFoundCategory as CategoryChannel).position;
         while ((lastFoundCategory = msg.guild.channels.cache.find(channel => channel.name.toLowerCase() == `${categoryName} ${counter}`)) != null) {
-            position = lastFoundCategory.position;
+            position = (lastFoundCategory as CategoryChannel).position;
             counter++;
             if (counter > 10) {
                 return null;
             }
         }
-        return await msg.guild.channels.create(`${categoryName} ${counter}`, {
-            type: 'category',
+        return await msg.guild.channels.create({
+            name: `${categoryName} ${counter}`,
+            type: ChannelType.GuildCategory,
             position: position,
             permissionOverwrites: [{
                 id: channelRole.id
@@ -140,9 +148,9 @@ async function extendCategory(categoryName: string, msg: Message & { guild: Guil
 }
 
 async function findRole(msg: Message & { guild: Guild }, roleName: string) {
-    const role = (await msg.guild.roles.fetch()).cache.find(role => role.name == roleName);
+    const role = (await msg.guild.roles.fetch()).find(role => role.name == roleName);
     if (!role) {
-        await msg.channel.send(`Server has no ${roleName} role!`);
+        await sendMessage(msg, `Server has no ${roleName} role!`);
         return;
     }
     return role;
@@ -156,10 +164,18 @@ function hasMessages(obj: any): obj is { messages: MessageManager } {
     return 'messages' in obj;
 }
 
+function isTextBasedChannel(channel: any): channel is TextChannel {
+    return channel && 'send' in channel;
+}
+
+async function sendMessage(msg: Message & { guild: Guild }, text: string) {
+    await (msg.channel as BaseGuildTextChannel).send(text);
+}
+
 async function mentor(msg: Message & { guild: Guild }) {
     const existingChannels = findUser(msg, true);
     if ((await existingChannels).length > CHANNELS_PER_STUDENT) {
-        await msg.channel.send(`You are at capacity!`);
+        await sendMessage(msg, `You are at capacity!`);
         await findUser(msg);
         return;
     }
@@ -174,19 +190,19 @@ async function mentor(msg: Message & { guild: Guild }) {
 
     const parts = msg.content.split(' ');
     if (parts.length < 3) {
-        await msg.channel.send(`Please format the request in \`${COMMAND_PREFIX}mentor <CATEGORY> <NATION>\``);
+        await sendMessage(msg, `Please format the request in \`${COMMAND_PREFIX}mentor <CATEGORY> <NATION>\``);
         return;
     }
     const categoryName = parts[1].toLowerCase();
     const categories = await findCategories(msg.guild);
     if (!categories[categoryName]) {
-        await msg.channel.send(`Unrecognized Category! Recognized Categories: "${keys(categories).join('", "')}"`);
+        await sendMessage(msg, `Unrecognized Category! Recognized Categories: "${keys(categories).join('", "')}"`);
         return;
     }
 
     let category: CategoryChannel | null = null;
     for (const channel of categories[categoryName]) {
-        if (channel.children.size < 50) {
+        if (channel.children.cache.size < 50) {
             category = channel;
             break;
         }
@@ -194,86 +210,85 @@ async function mentor(msg: Message & { guild: Guild }) {
     if (category == null) {
         category = await extendCategory(categoryName, msg);
         if (category == null) {
-            await msg.channel.send(`Out of room for ${categoryName}! Ask someone to make more!`);
+            await sendMessage(msg, `Out of room for ${categoryName}! Ask someone to make more!`);
             return;
         }
     }
 
     const nation = parts.splice(2).join('');
-    const mentorChannel = await msg.guild.channels.create(
-        `${msg.member?.displayName}-${nation}`,
-        {
-            type: 'text',
-            parent: category?.id,
-            permissionOverwrites: [
-                {
-                    id: msg.guild.id,
-                    deny: ['VIEW_CHANNEL'],
-                },
-                {
-                    id: msg.author.id,
-                    allow: ['VIEW_CHANNEL', 'MANAGE_MESSAGES', 'SEND_MESSAGES'],
-                },
-                {
-                    id: mentorRole.id,
-                    allow: ['VIEW_CHANNEL', 'MANAGE_MESSAGES', 'SEND_MESSAGES'],
-                },
-            ]
-        });
+    const mentorChannel = await msg.guild.channels.create({
+        name: `${msg.member?.displayName}-${nation}`,
+        type: ChannelType.GuildText,
+        parent: category?.id,
+        permissionOverwrites: [
+            {
+                id: msg.guild.id,
+                deny: ['ViewChannel'],
+            },
+            {
+                id: msg.author.id,
+                allow: ['ViewChannel', 'ManageMessages', 'SendMessages'],
+            },
+            {
+                id: mentorRole.id,
+                allow: ['ViewChannel', 'ManageMessages', 'SendMessages'],
+            },
+        ]
+    });
     await msg.member?.roles.add(studentRole);
-    await msg.channel.send(`Created ${mentorChannel.toString()}`);
+    await sendMessage(msg, `Created ${mentorChannel.toString()}`);
     await mentorChannel.send(MENTOR_CHANNEL_GREETING.replace('@name', msg.member?.toString() || `${STUDENT_ROLE}`));
 }
 
 async function initGuild(msg: Message & { guild: Guild }) {
-    const permResult = 268504272 & (msg.guild.me?.permissions.bitfield || 0);
-    if (permResult != 268504272) {
-        const p = new Permissions(268504272);
+    const permResult = 268504272n & (msg.guild.members.me?.permissions.bitfield || 0n);
+    if (permResult != 268504272n) {
+        const p = new PermissionsBitField(268504272n);
         const flags: string[] = [];
-        for (const s in Permissions.FLAGS) {
-            if (p.has(Permissions.FLAGS[s]) && !msg.guild.me?.permissions.has(Permissions.FLAGS[s])) {
-                flags.push(s);
+        for (const [key, value] of Object.entries(PermissionsBitField.Flags)) {
+            if (p.has(value) && !msg.guild.members.me?.permissions.has(value)) {
+                flags.push(key);
             }
         }
-        await msg.channel.send(`Missing permissions!\n${flags.join('\n')}`);
+        await sendMessage(msg, `Missing permissions!\n${flags.join('\n')}`);
         return;
     }
     log.info(`initalizing ${msg.guild.name}`);
-    const roleManager = await msg.guild.roles.fetch();
+    const roles = await msg.guild.roles.fetch();
     let changed = false;
-    if (!roleManager.cache.find(role => role.name == STUDENT_ROLE)) {
-        const role = await roleManager.create({ data: { name: STUDENT_ROLE, mentionable: false, permissions: 0 } });
-        await msg.channel.send(`Created ${role.toString()} as student role`);
+    if (!roles.find(role => role.name == STUDENT_ROLE)) {
+        const role = await msg.guild.roles.create({ name: STUDENT_ROLE, mentionable: false, permissions: [] });
+        await sendMessage(msg, `Created ${role.toString()} as student role`);
         changed = true;
     }
-    if (!roleManager.cache.find(role => role.name == MENTOR_ROLE)) {
-        const mentorRole = await roleManager.create({ data: { name: MENTOR_ROLE, mentionable: false, permissions: 0 } });
-        await msg.channel.send(`Created ${mentorRole.toString()} as mentor role`);
+    if (!roles.find(role => role.name == MENTOR_ROLE)) {
+        const mentorRole = await msg.guild.roles.create({ name: MENTOR_ROLE, mentionable: false, permissions: [] });
+        await sendMessage(msg, `Created ${mentorRole.toString()} as mentor role`);
         changed = true;
-        await msg.guild.me?.roles.add(mentorRole);
+        await msg.guild.members.me?.roles.add(mentorRole);
     }
-    if (!roleManager.cache.find(role => role.name == SUB_ROLE)) {
-        const subRole = await roleManager.create({ data: { name: SUB_ROLE, mentionable: false, permissions: 0 } });
-        await msg.channel.send(`Created ${subRole.toString()} as sub role`);
-        changed = true;
-    }
-    if (!roleManager.cache.find(role => role.name == BLITZ_ROLE)) {
-        const blitzRole = await roleManager.create({ data: { name: BLITZ_ROLE, mentionable: false, permissions: 0 } });
-        await msg.channel.send(`Created ${blitzRole.toString()} as blitz role`);
+    if (!roles.find(role => role.name == SUB_ROLE)) {
+        const subRole = await msg.guild.roles.create({ name: SUB_ROLE, mentionable: false, permissions: [] });
+        await sendMessage(msg, `Created ${subRole.toString()} as sub role`);
         changed = true;
     }
-    let categoryRole = roleManager.cache.find(role => role.name == MENTOR_CATEGORY);
+    if (!roles.find(role => role.name == BLITZ_ROLE)) {
+        const blitzRole = await msg.guild.roles.create({ name: BLITZ_ROLE, mentionable: false, permissions: [] });
+        await sendMessage(msg, `Created ${blitzRole.toString()} as blitz role`);
+        changed = true;
+    }
+    let categoryRole = roles.find(role => role.name == MENTOR_CATEGORY);
     if (!categoryRole) {
-        categoryRole = await roleManager.create({ data: { name: MENTOR_CATEGORY, mentionable: false, permissions: 0 } });
-        await msg.channel.send(`Created ${categoryRole.toString()} as mentor channel role`);
+        categoryRole = await msg.guild.roles.create({ name: MENTOR_CATEGORY, mentionable: false, permissions: [] });
+        await sendMessage(msg, `Created ${categoryRole.toString()} as mentor channel role`);
         changed = true;
     }
     if (changed) {
         log.info(`initalized ${msg.guild.name}`);
-        await msg.channel.send(`Initalized ${msg.guild.name}`);
+        await sendMessage(msg, `Initalized ${msg.guild.name}`);
     } else {
         if (msg.member?.roles.cache.find(role => role.name == MENTOR_ROLE) != null) {
-            await msg.channel.send(`Already initalized`);
+            await sendMessage(msg, `Already initalized`);
         }
     }
 }
@@ -307,9 +322,9 @@ async function findStales(msg: Message & { guild: Guild }) {
         const subcategorys = categories[parentCategory];
         for (const subcategory of subcategorys) {
             const channels: GuildChannel[] & { messages: MessageManager }[] = [];
-            subcategory.children.each(channel => {
+            subcategory.children.cache.forEach(channel => {
                 let foundOnlyMentors = true;
-                channel.members.each(member => {
+                channel.members.forEach(member => {
                     if (member.user.id == bot.user?.id) return;
                     if (member.roles.cache.find(r => r.id == role?.id) == null) {
                         foundOnlyMentors = false;
@@ -325,7 +340,7 @@ async function findStales(msg: Message & { guild: Guild }) {
                 for (const channel of channels) {
                     try {
                         const messages = await channel.messages.fetch({ limit: 1 });
-                        const m = messages.random();
+                        const m = messages.first();
                         if (!m || m.createdTimestamp < lastTalkThreashold.getTime()) {
                             idle.push(channel.toString());
                         }
@@ -337,19 +352,19 @@ async function findStales(msg: Message & { guild: Guild }) {
         }
     }
     if (onlyMentors.length > 0) {
-        await msg.channel.send(`Only ${role.name}:\n${onlyMentors.slice(0, Math.min(50, onlyMentors.length)).join('\n')}`);
+        await sendMessage(msg, `Only ${role.name}:\n${onlyMentors.slice(0, Math.min(50, onlyMentors.length)).join('\n')}`);
     }
     if (idle.length > 0) {
-        await msg.channel.send(`Idle since ${dateFormat(lastTalkThreashold, 'yyyy-mm-dd HH:MM')}:\n${idle.slice(0, Math.min(50, idle.length)).join('\n')}`);
+        await sendMessage(msg, `Idle since ${dateFormat(lastTalkThreashold, 'yyyy-mm-dd HH:MM')}:\n${idle.slice(0, Math.min(50, idle.length)).join('\n')}`);
     }
     if (onlyMentors.length == 0 && idle.length == 0) {
-        await msg.channel.send(`No stale channels found`);
+        await sendMessage(msg, `No stale channels found`);
     }
 }
 
 async function findUser(msg: Message & { guild: Guild }, quiet?: boolean) {
     let userID = msg.author.id;
-    const mentionedUser = msg.mentions.users.random();
+    const mentionedUser = msg.mentions.users.first();
     if (mentionedUser && msg.member?.roles.cache.find(role => role.name == MENTOR_ROLE)) {
         userID = mentionedUser.id;
     }
@@ -360,7 +375,7 @@ async function findUser(msg: Message & { guild: Guild }, quiet?: boolean) {
         const subcategorys = categories[parentCategory];
         for (const subcategory of subcategorys) {
             const channels: GuildChannel[] & { messages: MessageManager }[] = [];
-            subcategory.children.filter(channel => channel.permissionOverwrites.find((perm, key) => key == userID) != null).each(c => channels.push(c));
+            subcategory.children.cache.filter(channel => channel.permissionOverwrites.cache.find(overwrite => overwrite.id == userID) != null).forEach(c => channels.push(c));
             for (const c of channels) {
                 if (found.length < 50) {
                     found.push(c.toString());
@@ -369,7 +384,7 @@ async function findUser(msg: Message & { guild: Guild }, quiet?: boolean) {
         }
     }
     if(!quiet){
-        await msg.channel.send(`Found: ${found.join(' ')}`);
+        await sendMessage(msg, `Found: ${found.join(' ')}`);
     }
     return found;
 }
@@ -377,7 +392,7 @@ async function findUser(msg: Message & { guild: Guild }, quiet?: boolean) {
 async function rename(msg: Message & { guild: Guild }) {
     const parts = msg.content.split(' ');
     if (parts.length < 3) {
-        await msg.channel.send(`Please format the request in \`!mentor <NEW_ERA> <NEW_NATION>\``);
+        await sendMessage(msg, `Please format the request in \`!mentor <NEW_ERA> <NEW_NATION>\``);
         return;
     }
 
@@ -391,7 +406,7 @@ async function rename(msg: Message & { guild: Guild }) {
     let isInCategory = false;
     for (const group in categories) {
         for (const category of categories[group]) {
-            if (channel.parentID == category.id) {
+            if (channel.parentId == category.id) {
                 isInCategory = true;
             }
         }
@@ -401,20 +416,20 @@ async function rename(msg: Message & { guild: Guild }) {
         return;
     }
     const targetChannel = msg.channel as GuildChannel;
-    if (channel.permissionOverwrites.find((perm, key) => key == msg.author.id) == null) {
+    if (channel.permissionOverwrites.cache.find(overwrite => overwrite.id == msg.author.id) == null) {
         log.debug(`Non owner requested rename of un authorized channel. ${msg.member?.displayName}, ${targetChannel.name}`);
-        await msg.channel.send(`Only channel owners may use this command`);
+        await sendMessage(msg, `Only channel owners may use this command`);
         return;
     }
 
     const categoryName = parts[1].toLowerCase();
     if (!categories[categoryName]) {
-        await msg.channel.send(`Unrecognized era! Recognized Eras: ${keys(categories).join(' ')}`);
+        await sendMessage(msg, `Unrecognized era! Recognized Eras: ${keys(categories).join(' ')}`);
         return;
     }
     let category: CategoryChannel | null = null;
     for (const channel of categories[categoryName]) {
-        if (channel.children.size < 50) {
+        if (channel.children.cache.size < 50) {
             category = channel;
             break;
         }
@@ -423,17 +438,17 @@ async function rename(msg: Message & { guild: Guild }) {
         category = await extendCategory(categoryName, msg);
     }
     if (category == null) {
-        await msg.channel.send(`Out of room for ${categoryName}! Ask some one to make more!`);
+        await sendMessage(msg, `Out of room for ${categoryName}! Ask some one to make more!`);
         return;
     }
     const nation = parts.splice(2).join('');
 
     await targetChannel.edit({
-        parentID: category.id,
+        parent: category.id,
         name: `${msg.member?.displayName}-${nation}`
     });
 
-    await msg.channel.send(`Renamed to ${targetChannel.toString()}`);
+    await sendMessage(msg, `Renamed to ${targetChannel.toString()}`);
 }
 
 async function DRN(msg: Message & { guild: Guild }) {
@@ -499,12 +514,12 @@ async function DRN(msg: Message & { guild: Guild }) {
         const output: string[] = [];
         output.push('```');
         for (let i = 0; i < tableStr.length; i++) {
-            output.push(`${tableStr[i]} ${graph[i]}`.trimRight());
+            output.push(`${tableStr[i]} ${graph[i]}`.trimEnd());
         }
         output.push('```');
-        await msg.channel.send(`${output.join('\n')}`);
+        await sendMessage(msg, `${output.join('\n')}`);
     } else {
-        await msg.channel.send(`Unrecognized input`);
+        await sendMessage(msg, `Unrecognized input`);
     }
 }
 
@@ -524,9 +539,9 @@ async function bulkApplyStudentTag(msg: Message & { guild: Guild }) {
         for (const subcategory of subcategorys) {
             log.debug(`Checking sub category ${subcategory.name}`);
             const students: GuildMember[] = [];
-            subcategory.children.each(channel => {
+            subcategory.children.cache.forEach(channel => {
                 log.debug(`Checking channel ${channel.name}`);
-                channel.members.each(member => {
+                channel.members.forEach(member => {
                     if (member.user.id == bot.user?.id) return;
                     if (member.roles.cache.find(r => r.id == mentorRole?.id) == null) {
                         students.push(member);
@@ -542,7 +557,7 @@ async function bulkApplyStudentTag(msg: Message & { guild: Guild }) {
             }
         }
     }
-    await msg.channel.send(`Added ${studentRole.toString()} to ${changes} users`);
+    await sendMessage(msg, `Added ${studentRole.toString()} to ${changes} users`);
 }
 
 async function findStudents(msg:Message & {guild: Guild}) {
@@ -559,8 +574,8 @@ async function findStudents(msg:Message & {guild: Guild}) {
     for (const parentCategory in categories) {
         const subcategorys = categories[parentCategory];
         for (const subcategory of subcategorys) {
-            for(const c of subcategory.children.values()){
-                if(msg.guild.me && !c.permissionsFor(msg.guild.me)?.has('VIEW_CHANNEL')) continue;
+            for(const c of subcategory.children.cache.values()){
+                if(msg.guild.members.me && !c.permissionsFor(msg.guild.members.me)?.has('ViewChannel')) continue;
                 const channel = (c as TextChannel);
                 try{
                     const msgs = await channel.messages.fetch({ limit: 5 });
@@ -583,90 +598,90 @@ async function findStudents(msg:Message & {guild: Guild}) {
         }
         if(Object.values(channels).length >= 50) break;
     }
-    await msg.channel.send(`Found ${Object.values(channels).length} channels\n${Object.values(channels).join('\n')}`);
+    await sendMessage(msg, `Found ${Object.values(channels).length} channels\n${Object.values(channels).join('\n')}`);
 }
 
 async function addSubRole(msg: Message & {guild: Guild}){
     const role = await findRole(msg, SUB_ROLE);
     if (!role) {
-        await msg.channel.send(`Failed to find role ${SUB_ROLE}`);
+        await sendMessage(msg, `Failed to find role ${SUB_ROLE}`);
         return;
     }
 
     if(!msg.member){
-        await msg.channel.send(`This only works in guild channels!`);
+        await sendMessage(msg, `This only works in guild channels!`);
         return;
     }
 
     if(msg.member.roles.cache.find(r => r.id == role.id) != null){
-        await msg.channel.send(`Looks like I already love you as much as I can! I can only love you more if you don't have the ${SUB_ROLE} role!`);
+        await sendMessage(msg, `Looks like I already love you as much as I can! I can only love you more if you don't have the ${SUB_ROLE} role!`);
     }
 
     await msg.member.roles.add(role);
-    await msg.channel.send(`Now I love you the maxium amount! Thank you for being a ${SUB_ROLE}`);
+    await sendMessage(msg, `Now I love you the maxium amount! Thank you for being a ${SUB_ROLE}`);
     return;
 }
 
 async function removeSubRole(msg: Message & {guild: Guild}){
     const role = await findRole(msg, SUB_ROLE);
     if (!role) {
-        await msg.channel.send(`Failed to find role ${SUB_ROLE}`);
+        await sendMessage(msg, `Failed to find role ${SUB_ROLE}`);
         return;
     }
 
     if(!msg.member){
-        await msg.channel.send(`This only works in guild channels!`);
+        await sendMessage(msg, `This only works in guild channels!`);
         return;
     }
 
     if(msg.member.roles.cache.find(r => r.id == role.id) == null){
-        await msg.channel.send(`Looks like you've already left me! You can only leave me to my sorrows if you have the ${SUB_ROLE} role!`);
+        await sendMessage(msg, `Looks like you've already left me! You can only leave me to my sorrows if you have the ${SUB_ROLE} role!`);
     }
 
     await msg.member.roles.remove(role);
-    await msg.channel.send(`You have left me! I'll try to remember the time when you were a ${SUB_ROLE}`);
+    await sendMessage(msg, `You have left me! I'll try to remember the time when you were a ${SUB_ROLE}`);
     return;
 }
 
 async function addBlitzRole(msg: Message & {guild: Guild}){
     const role = await findRole(msg, BLITZ_ROLE);
     if (!role) {
-        await msg.channel.send(`Failed to find role ${BLITZ_ROLE}`);
+        await sendMessage(msg, `Failed to find role ${BLITZ_ROLE}`);
         return;
     }
 
     if(!msg.member){
-        await msg.channel.send(`This only works in guild channels!`);
+        await sendMessage(msg, `This only works in guild channels!`);
         return;
     }
 
     if(msg.member.roles.cache.find(r => r.id == role.id) != null){
-        await msg.channel.send(`Looks like I already blitz you as much as I can! I can only blitz you more if you don't have the ${BLITZ_ROLE} role!`);
+        await sendMessage(msg, `Looks like I already blitz you as much as I can! I can only blitz you more if you don't have the ${BLITZ_ROLE} role!`);
     }
 
     await msg.member.roles.add(role);
-    await msg.channel.send(`Now I blitz you the maxium amount! Thank you for being a ${BLITZ_ROLE}`);
+    await sendMessage(msg, `Now I blitz you the maxium amount! Thank you for being a ${BLITZ_ROLE}`);
     return;
 }
 
 async function removeBlitzRole(msg: Message & {guild: Guild}){
     const role = await findRole(msg, BLITZ_ROLE);
     if (!role) {
-        await msg.channel.send(`Failed to find role ${BLITZ_ROLE}`);
+        await sendMessage(msg, `Failed to find role ${BLITZ_ROLE}`);
         return;
     }
 
     if(!msg.member){
-        await msg.channel.send(`This only works in guild channels!`);
+        await sendMessage(msg, `This only works in guild channels!`);
         return;
     }
 
     if(msg.member.roles.cache.find(r => r.id == role.id) == null){
-        await msg.channel.send(`Looks like you don't want to be blitzed! You can only renounce being blitzed if you have the ${BLITZ_ROLE} role!`);
+        await sendMessage(msg, `Looks like you don't want to be blitzed! You can only renounce being blitzed if you have the ${BLITZ_ROLE} role!`);
     }
 
     await msg.member.roles.remove(role);
-    await msg.channel.send(`You have activated a NAP3! I can no longer blitz you... I'll try to remember the time when you were a ${BLITZ_ROLE}`);
+    await sendMessage(msg, `You have activated a NAP3! I can no longer blitz you... I'll try to remember the time when you were a ${BLITZ_ROLE}`);
     return;
 }
 
@@ -674,13 +689,13 @@ bot.on('ready', () => {
     log.info(`Logged in as ${bot?.user?.tag}!`);
 });
 
-bot.on('message', async msg => {
+bot.on('messageCreate', async msg => {
     //log.debug(`processing from ${msg.member?.displayName}`);
     try {
-        if (!msg.content.startsWith(`${COMMAND_PREFIX}`) || msg.channel.type == 'dm' || BANNED_PREFIXES.filter(ban => msg.content.startsWith(ban)).length > 0) {
+        if (!msg.content.startsWith(`${COMMAND_PREFIX}`) || msg.channel.type == ChannelType.DM || BANNED_PREFIXES.filter(ban => msg.content.startsWith(ban)).length > 0) {
             return;
         }
-        const command = msg.content.substr(COMMAND_PREFIX.length);
+        const command = msg.content.substring(COMMAND_PREFIX.length);
         if (hasGuild(msg)) {
             const mentorCMD = `${MENTOR_ROLE}`.toLowerCase();
             log.info(`processing ${command} from ${msg.member?.displayName} in ${msg.channel.name}`);
@@ -741,11 +756,11 @@ bot.on('message', async msg => {
                             cmds.push(`[${MENTOR_ROLE} only] ${COMMAND_PREFIX}stales <optional time: 1d> -- limit 50 channels`);
                         }
                         cmds.push('```');
-                        await msg.channel.send(`${cmds.join('\n')}`);
+                        await sendMessage(msg, `${cmds.join('\n')}`);
                         break;
                     }
                     default:
-                        await msg.channel.send(`Unrecognized command! try ${COMMAND_PREFIX}help for a list of commands`);
+                        await sendMessage(msg, `Unrecognized command! try ${COMMAND_PREFIX}help for a list of commands`);
                         await msg.react('👎');
                         return;
                 }
