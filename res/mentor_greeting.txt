@@ -1,15 +1,16 @@
 @name This will be your private space for discussing with the mentors, for any question you have pertaining to your game and situation. 
-you can always ask general knowledge related questions here but I'd advise to do so in the question and strategy question feed. so that all the other players may learn about it too
-please don't forget to check the pins for the rest of the channels and remember you can pin things in this channel if you want to save them. 🙂
+You can always ask general knowledge related questions here but we advise you to do so in the question and strategy question feed, so that all the other players may learn about it as well. Please don't forget to check the pins for the rest of the channels and remember you can pin things in this channel if you want to save them. 🙂
 
-For making it easy for mentors to assist you, please consider providing  some information for the mentors. 
+For making it easy for mentors to assist you, please consider providing  some information for the mentors:
 
 1). Post a Screenshot of your Pretender God/Bless/Build. 
 
-2). Provide what your current research is. (make sure to update this overtime) 
+2). Provide what your current research is and make sure to update this overtime.
 
 3). Provide your current gem income, item stash, and gem stockpile.
 
 4). Take pictures of the troops and mages you have available.
 
-5). Save and post information about opponents in your game
+5). Save and post information about opponents in your game.
+
+Note: If this is one of your first multiplayer games we recommend that you sit down for a session and try to test out your expansion before locking in any build before your game. The rule of thumb is obtaining 15 total provinces at worst by turns 12 (you count your cap; use F1 then press tab and manual count the provinces). Any build that yields you less than 15 provinces by 12 you throw into the trash.
